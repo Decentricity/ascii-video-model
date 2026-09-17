@@ -109,24 +109,30 @@ def run(cmd: list[str]) -> None:
 
 
 def run_stability_diag(ckpt: Path) -> None:
-    """Multi-horizon free rollouts + teacher-forced metrics (Phase B-shaped)."""
+    """Multi-horizon free rollouts + teacher-forced metrics (Phase B-shaped).
+
+    Non-fatal: carousel GIFs must still complete if diagnostics are killed/OOM.
+    """
     log("--- stability diagnostics (horizons 16/48/96) ---")
-    run(
-        [
-            str(VENV_PY),
-            str(ROOT / "scripts/fullvideo_stability_diag.py"),
-            "--checkpoint",
-            str(ckpt),
-            "--processed-dir",
-            str(ROOT / "data/processed/fullvideo"),
-            "--out-dir",
-            str(ROOT / "samples/rollouts"),
-            "--temperature",
-            str(TEMPERATURE),
-            "--n-seeds",
-            "4",
-        ]
-    )
+    try:
+        run(
+            [
+                str(VENV_PY),
+                str(ROOT / "scripts/fullvideo_stability_diag.py"),
+                "--checkpoint",
+                str(ckpt),
+                "--processed-dir",
+                str(ROOT / "data/processed/fullvideo"),
+                "--out-dir",
+                str(ROOT / "samples/rollouts"),
+                "--temperature",
+                str(TEMPERATURE),
+                "--n-seeds",
+                "4",
+            ]
+        )
+    except (subprocess.CalledProcessError, OSError) as e:
+        log(f"WARN stability diagnostics failed ({e}); continuing with carousel GIFs")
 
 
 def main() -> None:
@@ -153,7 +159,18 @@ def main() -> None:
     gifs_dir = PAGES / "assets" / "gifs"
     gifs_dir.mkdir(parents=True, exist_ok=True)
     caps_path = gifs_dir / "fullvideo_captions.txt"
-    caps_path.write_text("", encoding="utf-8")
+
+    # Resume-friendly: keep existing caption lines for completed GIFs
+    existing_caps: dict[int, str] = {}
+    if caps_path.is_file():
+        for line in caps_path.read_text(encoding="utf-8").splitlines():
+            if "|" not in line:
+                continue
+            idx_s, cap = line.split("|", 1)
+            try:
+                existing_caps[int(idx_s)] = cap.strip()
+            except ValueError:
+                continue
 
     sampler_meta = {
         "mode": "greedy" if TEMPERATURE <= 0 else "temperature",
@@ -167,10 +184,18 @@ def main() -> None:
     )
 
     captions: list[str] = []
+    caps_path.write_text("", encoding="utf-8")
     for i, (cls, name, path) in enumerate(seeds, 1):
         caption = f"{cls} / {name} · {SAMPLER_CAPTION}"
         out = ROOT / "samples" / "rollouts" / f"carousel_fullvideo_{i:02d}.avm.npz"
         gif = gifs_dir / f"fullvideo_{i:02d}_{cls}.gif"
+        if gif.is_file() and gif.stat().st_size > 1000:
+            log(f"--- fullvideo {i:02d} SKIP existing {gif.name} ---")
+            caption = existing_caps.get(i, caption)
+            captions.append(caption)
+            with caps_path.open("a", encoding="utf-8") as f:
+                f.write(f"{i:02d}|{caption}\n")
+            continue
         log(f"--- fullvideo {i:02d} {caption} ---")
         cmd = [
             str(VENV_PY),
