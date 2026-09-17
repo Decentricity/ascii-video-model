@@ -183,6 +183,27 @@ def main(argv: list[str] | None = None) -> int:
     STATUS.write_text(f"started {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
     results: dict = {}
 
+    # Preload any existing diag summaries (e.g. overfit from prior run)
+    for tag in ("overfit", "eye_sched", "eye_motion", "eye_delta", "eye_patch2"):
+        summary = read_summary(tag)
+        if summary:
+            run_guess = {
+                "overfit": "runs/overfit_eye",
+                "eye_sched": "runs/eye_sched",
+                "eye_motion": "runs/eye_motion",
+                "eye_delta": "runs/eye_delta",
+                "eye_patch2": "runs/eye_patch2",
+            }[tag]
+            results[tag] = {
+                "train_rc": 0,
+                "diag_rc": 0,
+                "best_val": best_val(_ROOT / run_guess),
+                "ckpt": summary.get("checkpoint"),
+                "diag": aggregate_h96(summary),
+                "preloaded": True,
+            }
+            status(f"preloaded {tag} diag={results[tag]['diag']}")
+
     phases = args.phases or [
         "prepare",
         "overfit",
@@ -205,23 +226,28 @@ def main(argv: list[str] | None = None) -> int:
             return rc
 
     plan = [
-        ("overfit", "overfit", "configs/train_overfit_eye.yaml", "data/processed/overfit_eye", "runs/overfit_eye"),
-        ("sched", "eye_sched", "configs/train_eye_sched.yaml", "data/processed/poc_eye", "runs/eye_sched"),
-        ("motion", "eye_motion", "configs/train_eye_motion.yaml", "data/processed/poc_eye", "runs/eye_motion"),
-        ("delta", "eye_delta", "configs/train_eye_delta.yaml", "data/processed/poc_eye", "runs/eye_delta"),
-        ("patch2", "eye_patch2", "configs/train_eye_patch2.yaml", "data/processed/poc_eye", "runs/eye_patch2"),
+        ("overfit", "overfit", "configs/train_overfit_eye.yaml", "data/processed/overfit_eye", "runs/overfit_eye", None),
+        ("sched", "eye_sched", "configs/train_eye_sched.yaml", "data/processed/poc_eye", "runs/eye_sched", "runs/overfit_eye/ckpt_best.pt"),
+        ("motion", "eye_motion", "configs/train_eye_motion.yaml", "data/processed/poc_eye", "runs/eye_motion", "runs/overfit_eye/ckpt_best.pt"),
+        ("delta", "eye_delta", "configs/train_eye_delta.yaml", "data/processed/poc_eye", "runs/eye_delta", "runs/overfit_eye/ckpt_best.pt"),
+        # patch2 has different n_patches — no warm-start
+        ("patch2", "eye_patch2", "configs/train_eye_patch2.yaml", "data/processed/poc_eye", "runs/eye_patch2", None),
     ]
 
-    for phase_key, tag, config, processed, run_dir in plan:
+    for phase_key, tag, config, processed, run_dir, init_rel in plan:
         if phase_key not in phases and tag not in phases:
             continue
         status(f"phase={tag}")
         run_path = _ROOT / run_dir
         if not args.skip_train:
+            init = (_ROOT / init_rel) if init_rel and (_ROOT / init_rel).is_file() else None
+            if init is not None:
+                status(f"warm_start {tag} from {init}")
             rc = train(
                 str(_ROOT / config),
                 f"bugblob_train_{tag}.log",
                 max_steps=args.max_steps_override,
+                init=init,
             )
             if rc != 0:
                 status(f"FAIL train {tag} rc={rc}")
@@ -242,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
             "best_val": best_val(run_path),
             "ckpt": str(ckpt),
             "diag": aggregate_h96(summary),
+            "init": init_rel,
         }
         status(f"done {tag} best_val={results[tag]['best_val']} diag={results[tag]['diag']}")
 

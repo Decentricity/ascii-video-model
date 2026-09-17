@@ -1,0 +1,34 @@
+data:
+  context_frames: 8
+  future_frames: 4
+  patch_h: 4
+  patch_w: 4
+  processed_dir: data/processed/fullvideo
+model:
+  d_ff: 2048
+  d_model: 512
+  dropout: 0.15
+  n_heads: 8
+  n_layers: 8
+paths:
+  run_dir: runs/fullvideo_bugblob
+train:
+  batch_size: 2
+  change_weight: 5.0
+  checkpoint_every: 2000
+  early_stop_patience: 4
+  grad_clip: 1.0
+  log_every: 50
+  lr: 0.0002
+  max_steps: 3000
+  min_steps: 1000
+  num_workers: 4
+  precision: bf16
+  rollout_train_steps: 2
+  rollout_train_steps_max: 4
+  sample_every: 1000
+  scheduled_sampling_p_max: 0.5
+  scheduled_sampling_warmup_steps: 400
+  seed: 42
+  use_delta: false
+  weight_decay: 0.01
