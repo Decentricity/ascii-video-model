@@ -679,3 +679,97 @@ When modifying architecture or data representation:
 When uncertain, favor the smallest experiment that can falsify the idea.
 
 The project should remain weird, simple, measurable, and runnable on one enthusiast workstation.
+
+---
+
+# Current POC finding: rollout stability failure
+
+The current proof-of-concept is trained on the **UCF101 `ApplyEyeMakeup` subset only**, not on the full heterogeneous UCF101 action distribution.
+
+Observed behavior in free-running generation:
+
+- the first part of the generated sequence is visually recognizable and relatively stable;
+- coherence deteriorates after the initial rollout period;
+- later frames drift into increasingly abstract/blocky ASCII structure rather than preserving the original scene and motion;
+- the key problem to solve now is **long-horizon stability**, not broader dataset coverage.
+
+Treat the current diagnosis as a hypothesis to test, not a settled fact. The leading explanation is classic autoregressive exposure-bias / rollout failure: small token mistakes accumulate, generated states drift away from the training distribution, and the model is then forced to condition on its own increasingly off-manifold outputs.
+
+Do **not** broaden the dataset or substantially scale model size until this failure mode is characterized.
+
+## Immediate experiments, in priority order
+
+### 1. Prove the architecture can sustain a long rollout at all
+
+Intentionally overfit a single clip, then a tiny handful of clips.
+
+The model should be able to reproduce or continue these clips for a materially longer horizon without collapse. If it cannot remain stable even when memorization is easy, fix architecture/training/inference before adding data.
+
+Record free-rollout quality as a function of generated frame number.
+
+### 2. Train on its own rollout distribution
+
+Pure one-step teacher forcing can create a train/inference mismatch.
+
+Experiment with:
+
+- multi-step rollout loss;
+- scheduled sampling;
+- feeding a controlled fraction of model-generated frames back into the training context;
+- curriculum rollout horizons that increase during training.
+
+Compare one-step validation quality against actual free-running generation. A model that scores well under teacher forcing but collapses in free rollout has not solved the target task.
+
+### 3. Test frame-delta and patch prediction
+
+Try predicting **changes relative to the previous frame** rather than regenerating every cell from scratch.
+
+Also compare cell-level prediction against patch-level prediction.
+
+The hypothesis is that explicit temporal redundancy may reduce the number of opportunities for small errors to compound while encouraging preservation of stable scene structure.
+
+### 4. Sweep inference stochasticity
+
+Run controlled inference sweeps over:
+
+- temperature;
+- top-k;
+- top-p if implemented;
+- greedy decoding.
+
+Start with lower temperature and constrained sampling to determine whether collapse is partly sampling-driven.
+
+Always save the exact decoding configuration with generated samples.
+
+### 5. Add temporal stability pressure
+
+Investigate losses or regularizers that penalize unjustified glyph/color changes between adjacent frames while still permitting genuine motion.
+
+Possible measurements/targets:
+
+- glyph flicker rate;
+- foreground-color flicker rate;
+- background-color flicker rate;
+- frame-to-frame token change percentage;
+- patch persistence;
+- motion-aware rather than naive frame similarity.
+
+Do not simply force successive frames to be identical: the goal is stable motion, not frozen video.
+
+## Required diagnostics for this phase
+
+For every serious training run, produce at least:
+
+1. teacher-forced next-frame metrics;
+2. free-running rollout samples at fixed horizons;
+3. per-frame or per-step degradation curves;
+4. frame-to-frame token-change statistics;
+5. the exact sampler settings;
+6. comparison against a previous-frame-copy baseline;
+7. a deliberately overfit one/few-clip sanity test.
+
+Useful rollout horizons should include short, medium, and clearly failure-inducing lengths so the onset of degradation is visible rather than summarized into one aggregate number.
+
+The near-term POC milestone is therefore:
+
+> **Keep an `ApplyEyeMakeup` scene coherent through a substantially longer autonomous ASCII-video rollout before scaling data diversity.**
