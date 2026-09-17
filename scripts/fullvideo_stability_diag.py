@@ -101,7 +101,7 @@ def teacher_forced_metrics(
     g0, _, _ = frames_to_patches(v0.glyphs, v0.fg, v0.bg, ph, pw)
     n_patches = g0.shape[1]
     model = build_model_from_config(cfg, n_patches=n_patches).to(device)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(ckpt["model"], strict=False)
     model.eval()
 
     ds = NextFrameDataset(seed_paths, context_frames=ctx, patch_h=ph, patch_w=pw)
