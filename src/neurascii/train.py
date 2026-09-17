@@ -82,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--max-steps", type=int, default=None)
+    p.add_argument(
+        "--init-checkpoint",
+        type=Path,
+        default=None,
+        help="Load model weights only (state_dict); do not restore optimizer/step",
+    )
     args = p.parse_args(argv)
 
     cfg = yaml.safe_load(args.config.read_text())
@@ -122,6 +128,17 @@ def main(argv: list[str] | None = None) -> int:
     model = build_model_from_config(cfg, n_patches=n_patches).to(device)
     n_params = model.count_parameters()
     print(f"parameters: {n_params/1e6:.2f}M  n_patches={n_patches}  train_windows={len(train_ds)}")
+
+    if args.init_checkpoint is not None:
+        init_path = args.init_checkpoint
+        if not init_path.is_file():
+            raise SystemExit(f"init checkpoint not found: {init_path}")
+        init_ckpt = torch.load(init_path, map_location=device, weights_only=False)
+        missing, unexpected = model.load_state_dict(init_ckpt["model"], strict=False)
+        print(
+            f"init from {init_path} (weights only; missing={len(missing)} unexpected={len(unexpected)})",
+            flush=True,
+        )
 
     opt = torch.optim.AdamW(
         model.parameters(),
