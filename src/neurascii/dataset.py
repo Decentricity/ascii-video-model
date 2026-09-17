@@ -27,6 +27,7 @@ def frames_to_patches(
     t, h, w = glyphs.shape
     assert h % patch_h == 0 and w % patch_w == 0
     ph, pw = h // patch_h, w // patch_w
+
     def _reshape(a: np.ndarray) -> np.ndarray:
         return (
             a.reshape(t, ph, patch_h, pw, patch_w)
@@ -70,7 +71,11 @@ def patches_to_frames(
 
 
 class NextFrameDataset(Dataset):
-    """Windows of context_frames → next frame (as flat patch cell sequences)."""
+    """Windows of context_frames → next frame(s) as flat patch cell sequences.
+
+    When ``future_frames`` > 1, targets have shape (R, N, K) for multi-step
+    rollout training / scheduled sampling.
+    """
 
     def __init__(
         self,
@@ -79,17 +84,17 @@ class NextFrameDataset(Dataset):
         context_frames: int = 8,
         patch_h: int = 4,
         patch_w: int = 4,
+        future_frames: int = 1,
     ) -> None:
         self.context = context_frames
         self.patch_h = patch_h
         self.patch_w = patch_w
+        self.future_frames = max(1, int(future_frames))
         self.samples: list[tuple[int, int]] = []  # (video_idx, start_t)
         self.videos: list[dict] = []
         for path in avm_paths:
             v = load_avm(path)
-            g, f, b = frames_to_patches(
-                v.glyphs, v.fg, v.bg, patch_h, patch_w
-            )
+            g, f, b = frames_to_patches(v.glyphs, v.fg, v.bg, patch_h, patch_w)
             self.videos.append(
                 {
                     "path": str(path),
@@ -101,8 +106,8 @@ class NextFrameDataset(Dataset):
                     "T": v.T,
                 }
             )
-            # need context + 1 target
-            max_start = v.T - (context_frames + 1)
+            need = context_frames + self.future_frames
+            max_start = v.T - need
             for t0 in range(max(0, max_start + 1)):
                 self.samples.append((len(self.videos) - 1, t0))
 
@@ -113,12 +118,21 @@ class NextFrameDataset(Dataset):
         vi, t0 = self.samples[idx]
         v = self.videos[vi]
         t1 = t0 + self.context
+        t2 = t1 + self.future_frames
         ctx_g = v["g"][t0:t1]  # C, N, cells
         ctx_f = v["f"][t0:t1]
         ctx_b = v["b"][t0:t1]
-        tgt_g = v["g"][t1]
-        tgt_f = v["f"][t1]
-        tgt_b = v["b"][t1]
+        tgt_g = v["g"][t1:t2]  # R, N, cells
+        tgt_f = v["f"][t1:t2]
+        tgt_b = v["b"][t1:t2]
+        # last context frame = prev for change mask on first target
+        prev_g = ctx_g[-1]
+        prev_f = ctx_f[-1]
+        prev_b = ctx_b[-1]
+        if self.future_frames == 1:
+            tgt_g = tgt_g[0]
+            tgt_f = tgt_f[0]
+            tgt_b = tgt_b[0]
         return {
             "ctx_g": torch.from_numpy(ctx_g.astype(np.int64)),
             "ctx_f": torch.from_numpy(ctx_f.astype(np.int64)),
@@ -126,6 +140,9 @@ class NextFrameDataset(Dataset):
             "tgt_g": torch.from_numpy(tgt_g.astype(np.int64)),
             "tgt_f": torch.from_numpy(tgt_f.astype(np.int64)),
             "tgt_b": torch.from_numpy(tgt_b.astype(np.int64)),
+            "prev_g": torch.from_numpy(prev_g.astype(np.int64)),
+            "prev_f": torch.from_numpy(prev_f.astype(np.int64)),
+            "prev_b": torch.from_numpy(prev_b.astype(np.int64)),
         }
 
 
