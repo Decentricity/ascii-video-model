@@ -1,18 +1,158 @@
 # AGENTS.md
 
-This repository contains an experimental neural video model whose native representation is **colored ASCII video**.
+NeurASCII is an experimental neural video model whose native representation is **colored ASCII video**. The model operates directly on symbolic glyph/color grids and generates terminal-playable video.
 
-Agents working on this repository should preserve the central research idea:
+> The network must operate on symbolic character/color grids directly. Do not silently turn this back into ordinary raster-video modeling.
 
-> The neural network must operate on symbolic character/color grids directly. Do not silently turn the problem back into ordinary raster-video modeling.
+# CURRENT AGENT PRIORITY — READ THIS FIRST
 
-## Core constraints
+## Phase C blocker: expanding static blob / autoregressive attractor
 
-### 1. ASCII is the native representation
+The current full-scale experiment has now moved beyond the earlier `ApplyEyeMakeup` smoke test.
+
+Current run context:
+
+- dataset: full `bitmind/UCF101Fullvideo` corpus;
+- approximately **7 GB** of video;
+- **13,451 videos / 101 classes**;
+- model: approximately **32M parameters**;
+- warm-started from the earlier `videos_all` weights;
+- `max_steps=10000`;
+- best checkpoint observed around **step 8000**, validation loss approximately **2.849**;
+- free-running examples have been generated from diverse UCF101 class seeds;
+- the rollout shown in the current Phase C page uses **greedy decoding (`temperature=0`)**.
+
+### Empirical failure pattern
+
+This is the current problem agents should optimize against:
+
+1. The seeded beginning of a rollout can retain recognizable scene structure.
+2. During autonomous generation, connected colored regions progressively become **larger and coarser**.
+3. Distinct objects/regions merge into broad ASCII blobs.
+4. Once a large blob forms, the rollout becomes increasingly **static** rather than maintaining meaningful motion.
+5. The result can remain locally stable while being globally wrong: a giant blocky attractor replaces the original scene dynamics.
+
+In shorthand, this is the **"bug blob" failure mode: the blob grows, then freezes**.
+
+Do **not** treat a good next-frame validation loss as success if free-running rollout enters this state.
+
+### Working hypothesis
+
+Treat this as a hypothesis to test, not established fact.
+
+The leading explanation is an **autoregressive attractor / oversmoothing failure** caused by some combination of:
+
+- one-step teacher forcing creating train/inference exposure mismatch;
+- small token errors accumulating during free rollout;
+- the model drifting off the training manifold and conditioning on its own degraded predictions;
+- full-frame loss being dominated by static or slowly changing regions;
+- under uncertainty, large low-frequency glyph/color regions being safer predictions than detailed moving structure;
+- greedy decoding repeatedly selecting those modal predictions and driving the sequence toward a fixed point;
+- patch scale or spatial bottlenecks encouraging coarse structures to merge.
+
+Dataset size alone is **not** currently the main lever: the failure persisted after scaling to the full UCF101 corpus.
+
+## Immediate experiments, in priority order
+
+### 1. Train explicitly for free-running rollouts
+
+Pure one-step teacher forcing is no longer enough.
+
+Implement and compare:
+
+- multi-step rollout loss;
+- scheduled sampling;
+- feeding a controlled fraction of model-generated frames back into training context;
+- curriculum rollout horizons that increase during training.
+
+Always compare teacher-forced next-frame quality against autonomous rollout quality. If teacher-forced metrics improve while rollout stability does not, the target task has not improved.
+
+### 2. Predict changes, not entire frames
+
+Test **frame-delta / changed-cell prediction**.
+
+The model should explicitly learn what changes from `t` to `t+1` rather than repeatedly reconstructing every stable cell. This may preserve scene identity while focusing capacity and loss on actual motion.
+
+Useful variants:
+
+- changed-cell mask + new glyph/color values;
+- residual/delta representation;
+- copy-from-previous-frame as the default action with sparse edits;
+- patch-level delta prediction.
+
+### 3. Stop static background from dominating the objective
+
+Measure the fraction of unchanged versus changed cells and test motion-aware weighting.
+
+Candidates:
+
+- upweight cells/patches that changed between ground-truth frames;
+- upweight rare glyph/color transitions;
+- separate losses for static preservation and motion prediction;
+- report loss on changed cells separately from loss on unchanged cells.
+
+Do not solve this by simply encouraging more random change. The desired result is **structured motion**, not flicker.
+
+### 4. Test spatial granularity
+
+Current blob growth may be amplified by patch/coarse spatial representation.
+
+Compare:
+
+- smaller patches;
+- current patch size;
+- hierarchical coarse-to-fine prediction;
+- local refinement after coarse prediction.
+
+A model should not gain rollout stability merely by merging nearby structures into increasingly large blocks.
+
+### 5. Keep narrow-domain sanity runs
+
+Maintain a small `ApplyEyeMakeup` or one/few-clip configuration alongside full UCF101.
+
+Use it to answer a simpler question:
+
+> Can this exact architecture/training objective sustain coherent autonomous motion when the visual distribution is narrow and memorization is easy?
+
+If a deliberately overfit one/few-clip model also enters the blob attractor, fix the objective/architecture before blaming dataset diversity.
+
+### 6. Sweep decoding, but do not mistake sampling fixes for training fixes
+
+Run controlled inference sweeps over:
+
+- greedy decoding;
+- temperature;
+- top-k;
+- top-p if implemented.
+
+Lower or nonzero stochasticity may change the onset of collapse, but the goal is a model whose learned dynamics are stable rather than a sampler that cosmetically hides failure.
+
+Store exact decoding settings next to every generated sample.
+
+# Required rollout diagnostics
+
+Every serious train/eval should produce:
+
+1. teacher-forced next-frame metrics;
+2. free-running samples at fixed short/medium/long horizons, e.g. 16 / 48 / 96 frames;
+3. per-step degradation curves;
+4. frame-to-frame token-change percentage;
+5. changed-cell versus unchanged-cell loss;
+6. connected-region / blob-size statistics if practical;
+7. motion or changed-patch persistence over rollout time;
+8. exact sampler settings;
+9. comparison with a previous-frame-copy baseline;
+10. a one/few-clip overfit sanity run.
+
+A useful additional diagnostic for the current failure is **largest connected region size versus generated frame number**. If the largest region consistently expands while total motion decays, that quantitatively captures the observed bug-blob attractor.
+
+# Core project constraints
+
+## 1. ASCII is the native representation
 
 Input data is not screenshots of terminal output.
 
-Each frame must retain symbolic values such as:
+Each cell should retain symbolic values such as:
 
 ```text
 glyph ID
@@ -20,27 +160,17 @@ foreground color ID
 background color ID
 ```
 
-The model should receive these values directly.
+The model receives these values directly. Do not rasterize characters into images before training unless implementing an explicitly named comparison baseline.
 
-Do not rasterize characters into images before training unless implementing an explicitly named comparison baseline.
+## 2. Output must remain terminal-playable
 
-### 2. Output must remain terminal-playable
-
-The model's primary output is colored ASCII video.
-
-A valid generated sequence should be playable in a headless terminal without requiring:
-
-- X11
-- Wayland
-- framebuffer rendering
-- browser rendering
-- GPU display output
+The primary output is colored ASCII video and should be playable headlessly without requiring X11, Wayland, browser rendering, or GPU display output.
 
 ANSI/libcaca/ncurses-compatible streaming is desirable.
 
-### 3. Realistic-video reconstruction is a separate downstream model
+## 3. Photorealistic reconstruction is downstream
 
-Do not introduce a diffusion/video decoder into the core MVP.
+Do not introduce a diffusion/video renderer into the core model merely to improve apparent quality.
 
 The project intentionally separates:
 
@@ -54,11 +184,11 @@ from:
 photorealistic synthesis
 ```
 
-The ASCII generator must be useful and testable independently.
+A later model may conditionally reconstruct realistic video from generated ASCII sequences, but NeurASCII must remain independently useful and testable.
 
-### 4. Optimize for a single RTX 4070 12 GB workstation
+## 4. Target a single consumer workstation
 
-Assume the initial training environment is approximately:
+Assume approximately:
 
 ```text
 Ubuntu Linux
@@ -67,515 +197,89 @@ NVIDIA RTX 4070 12 GB
 Intel i9-class CPU
 ```
 
-Avoid architectures whose minimum viable experiment requires datacenter GPUs.
+Prefer experiments that fit this machine. Use BF16/FP16, gradient accumulation, checkpointing, SDPA/FlashAttention, efficient dataset IO, and 8-bit optimizer states where useful.
 
-Initial model target:
+Do not hide OOMs by silently changing meaningful experimental settings.
 
-```text
-~30M parameters
-```
+## 5. Keep scientific claims falsifiable
 
-Reasonable exploratory range:
+ASCII efficiency is a hypothesis, not an assumption.
 
-```text
-30M-80M
-```
+Eventually compare against roughly compute/information-matched baselines such as:
 
-Larger experiments may be added later.
+- downsampled RGB video;
+- quantized-color pixel video;
+- ASCII without color.
 
-### 5. Establish baselines
+# Representation and model guidance
 
-Do not claim efficiency advantages solely because ASCII feels compressed.
+A frame is a symbolic lattice over `(row, column)` with glyph and color attributes, extended over time.
 
-At minimum plan comparisons against:
+Keep glyph identity explicit. Prefer separate embeddings/heads for glyph, foreground color, and background color unless a combined vocabulary demonstrably works better.
 
-- downsampled RGB video
-- quantized-color pixel video
-- ASCII without color
+Candidate model families include:
 
-Try to match parameter count, compute, and approximate information bandwidth.
+- causal Transformer;
+- factorized spatial-temporal Transformer;
+- recurrent Transformer;
+- Mamba/state-space models;
+- ConvGRU-like symbolic models.
 
----
-
-# Development priorities
-
-Work in this order unless there is a strong technical reason not to.
-
-## Priority 1 — canonical file format
-
-Define a stable representation for ASCII video.
-
-Requirements:
-
-- frame dimensions
-- frame rate metadata
-- glyph vocabulary metadata
-- foreground palette metadata
-- background palette metadata
-- deterministic indexing
-- random-access frames if practical
-- efficient sequential training reads
-- lossless round-trip between stored symbolic frame and terminal display
-
-Candidate storage schemes include:
-
-- NumPy arrays
-- compressed NumPy archives
-- Zarr
-- HDF5
-- custom binary framing
-- memory-mapped arrays
-
-Favor simple, inspectable formats first.
-
-The first format does not need to be maximally compressed.
-
-## Priority 2 — deterministic video-to-ASCII conversion
-
-Create a reproducible preprocessing pipeline:
-
-```text
-source video
--> decode
--> FPS normalization
--> resize
--> libcaca conversion
--> symbolic extraction
--> serialized dataset
-```
-
-Pin or record every renderer setting that can influence output.
-
-Avoid nondeterministic glyph/color selection.
-
-If libcaca APIs do not expose the symbolic output cleanly, investigate:
-
-- direct canvas APIs
-- export formats
-- terminal/ANSI capture
-- deterministic reimplementation of the renderer
-
-Do not use OCR on rendered ASCII.
-
-## Priority 3 — player
-
-Before training anything, implement a player that reads the dataset format and reproduces the ASCII video.
-
-Suggested CLI:
-
-```bash
-python -m neurascii.play sample.caca-video
-```
-
-Desired flags:
-
-```text
---fps
---loop
---no-color
---start
---end
-```
-
-The stored representation and the displayed output must agree exactly.
-
-## Priority 4 — dataset tooling
-
-Implement:
-
-```text
-dataset inspection
-train/validation split
-clip extraction
-statistics
-token-frequency counts
-palette statistics
-glyph statistics
-temporal-change statistics
-```
-
-Report:
-
-- total source duration
-- frame count
-- effective patch count
-- estimated training tokens
-- storage size
-- average frame delta
-- glyph entropy
-- color entropy
-
-## Priority 5 — trivial baselines
-
-Before neural training implement:
-
-1. previous-frame copy
-2. frame interpolation if meaningful
-3. most-common token prediction
-4. simple per-cell Markov model
-
-The neural model must outperform trivial baselines.
-
-## Priority 6 — neural MVP
-
-Start with next-frame prediction.
-
-Recommended initial settings:
-
-```yaml
-frame:
-  width: 80
-  height: 48
-  fps: 10
-
-patch:
-  width: 4
-  height: 4
-
-model:
-  target_parameters: 30000000
-  precision: bf16
-
-context:
-  frames: 8
-```
-
-Treat these as defaults, not immutable requirements.
-
----
-
-# Model architecture guidance
-
-Prefer a simple architecture first.
-
-Good starting architecture:
-
-```text
-glyph embedding
-color embeddings
-      |
-      v
-cell/patch encoder
-      |
-      v
-spatial + temporal positional encoding
-      |
-      v
-causal Transformer
-      |
-      +--> glyph prediction
-      +--> foreground-color prediction
-      +--> background-color prediction
-```
-
-Do not combine all glyph/color combinations into a single giant vocabulary without benchmarking why that is superior.
-
-Separate heads make the representation easier to reason about.
-
-Possible later architectures:
-
-- Mamba/state-space
-- recurrent transformer
-- factorized spatial-temporal transformer
-- hierarchical transformer
-- ConvGRU symbolic model
-
-Streaming inference is an eventual design goal, so architectures with efficient recurrent state deserve later investigation.
-
----
+Streaming inference is a long-term goal, so recurrent/state-space approaches remain interesting after the current rollout objective is stabilized.
 
 # Patching
 
-Avoid immediately modeling each terminal cell as a full autoregressive timestep.
+At 80x48, a frame contains 3,840 cells; at 10 FPS that is 38,400 cell positions/sec. Spatial patches can reduce sequence length, but patching must be treated as an experimental tradeoff because the current coarse-blob failure may interact with spatial granularity.
 
-At 80x48 there are:
+Keep patch size configurable and benchmark at least two granularities before concluding that larger patches are desirable.
 
-```text
-3840 cells/frame
-```
+# Dataset discipline
 
-At 10 FPS:
+Split by **source video**, not adjacent clips, to avoid temporal leakage.
 
-```text
-38,400 cell positions/sec
-```
+Track:
 
-Spatial patches can reduce sequence length dramatically.
+- total duration;
+- source video count;
+- frame count;
+- effective patch/token count;
+- glyph and color entropy;
+- average frame delta;
+- changed-cell fraction;
+- class/domain composition.
 
-Start with:
+Do not assume more diverse data fixes rollout collapse. The full UCF101 Phase C experiment is evidence that scale/diversity alone is insufficient for the current architecture/objective.
 
-```text
-4x4 cells
-```
+# Baselines
 
-but keep patch dimensions configurable.
+Maintain trivial baselines:
 
-Potential implementations:
+1. previous-frame copy;
+2. interpolation where meaningful;
+3. most-common token prediction;
+4. simple cell/patch Markov predictor.
 
-### Flattened patch features
+A learned model that produces attractive first frames but collapses into a static blob has not meaningfully beaten a persistence baseline for long-horizon generation.
 
-Simple and easy to debug.
+# Evaluation philosophy
 
-### Learned patch encoder
+Single-frame accuracy is insufficient.
 
-Small MLP/attention/conv-like symbolic encoder.
+Report both token metrics and rollout behavior:
 
-### Discrete patch vocabulary
-
-Potentially very efficient if common patterns repeat.
-
-Do not introduce vector quantization until the simpler version is working.
-
----
-
-# Training objectives
-
-Implement in incremental order.
-
-## Objective A — next frame
-
-Input previous N frames, predict frame N+1.
-
-## Objective B — autoregressive continuation
-
-Roll predictions back into the context and generate longer sequences.
-
-## Objective C — masked reconstruction
-
-Optional auxiliary objective.
-
-## Objective D — multi-frame horizon
-
-Predict multiple future frames.
-
-## Objective E — frame deltas
-
-Experiment with predicting symbolic changes rather than complete frames.
-
-Frame-delta prediction is particularly interesting because ASCII video may contain strong temporal redundancy.
-
----
-
-# Training engineering
-
-Use VRAM carefully.
-
-Preferred techniques:
-
-- BF16 when supported
-- FP16 otherwise
-- PyTorch SDPA / FlashAttention where available
-- gradient accumulation
-- gradient checkpointing
-- fused optimizer if stable
-- optional 8-bit optimizer
-- compile only after correctness is established
-
-Log:
-
-```text
-training loss
-validation loss
-glyph loss
-foreground-color loss
-background-color loss
-tokens/sec
-VRAM usage
-wall-clock step time
-```
-
-Never hide OOM problems by silently reducing meaningful experimental settings.
-
-Record configuration changes.
-
----
-
-# Dataset scale
-
-Use staged scaling.
-
-## Smoke test
-
-```text
-minutes of video
-```
-
-Purpose:
-
-- verify format
-- verify training loop
-- intentionally overfit tiny sample
-
-## Prototype
-
-```text
-1-5 hours
-```
-
-Purpose:
-
-- determine whether coherent motion is learnable
-
-## MVP
-
-```text
-10-20 hours
-```
-
-Purpose:
-
-- serious first generative model
-
-## Later research
-
-```text
-50-200 hours
-```
-
-and potentially:
-
-```text
-500+ hours
-```
-
-Do not preprocess hundreds of hours before validating the model on a small corpus.
-
----
-
-# First expected research result
-
-The first meaningful demo should be:
-
-```text
-source ASCII clip
-model-conditioned continuation
-```
-
-played directly in the terminal.
-
-Target clip length can initially be only a few seconds.
-
-Success means the generated sequence exhibits visibly nontrivial temporal structure rather than:
-
-- static copying
-- random flicker
-- palette noise
-- rapid collapse
-- training-example replay
-
----
-
-# Evaluation
-
-Track both token metrics and behavior.
-
-## Token metrics
-
-- glyph cross entropy
-- foreground-color cross entropy
-- background-color cross entropy
-- exact cell accuracy
-- patch accuracy
-
-## Temporal metrics
-
-- frame-to-frame change rate
-- flicker rate
-- rollout stability
-- motion consistency
-
-## Compute metrics
-
-- training FLOPs if practical
-- steps/sec
-- patches/sec
-- VRAM
-- checkpoint size
-- inference speed
-
-## Human inspection
+- glyph cross entropy;
+- foreground/background color loss;
+- exact cell/patch accuracy;
+- changed-cell accuracy;
+- frame-to-frame change rate;
+- flicker rate;
+- motion consistency;
+- largest connected-region growth;
+- rollout stability;
+- time-to-collapse / time-to-attractor;
+- throughput, VRAM, checkpoint size, inference speed.
 
 Always save terminal-playable samples at fixed training intervals.
-
-A statistically improving loss is not sufficient if visual rollouts remain useless.
-
----
-
-# Baseline experiment design
-
-The strongest eventual comparison is:
-
-```text
-ASCII representation
-vs.
-low-bandwidth pixel representation
-```
-
-with roughly equal:
-
-```text
-parameter count
-training time
-compute
-source duration
-information rate
-```
-
-Do not compare a 30M ASCII model against a vastly larger or higher-bandwidth pixel baseline and infer architectural superiority.
-
----
-
-# Reconstruction / upscaling
-
-This is explicitly a later phase.
-
-The eventual system may look like:
-
-```text
-ASCII sequence
-+ optional prompt
-+ optional keyframe
-        |
-        v
-realistic-video reconstruction model
-```
-
-The reconstruction model cannot recover information destroyed by ASCII conversion.
-
-Describe this as:
-
-```text
-conditional reconstruction
-```
-
-or:
-
-```text
-plausible visual synthesis
-```
-
-not lossless decoding.
-
-Temporal consistency is more important than recreating the exact original source pixels.
-
----
-
-# Research questions worth testing
-
-Agents may create issues or experiments around:
-
-1. Does color help temporal prediction enough to justify its token cost?
-2. Does background color materially improve representation?
-3. Which glyph vocabulary minimizes temporal flicker?
-4. Does 2x2 patching outperform 4x4 per compute?
-5. Are learned patches better than direct symbolic patches?
-6. Does delta prediction improve long rollouts?
-7. Does temporal smoothing before libcaca conversion improve learnability?
-8. Does a state-space model outperform a Transformer for long streams?
-9. How much source-video diversity is needed before generalization appears?
-10. Does ASCII-space modeling outperform equal-bandwidth quantized pixels?
-
----
 
 # Avoid these failure modes
 
@@ -585,195 +289,37 @@ Do not feed terminal screenshots into the main model.
 
 ## Premature photorealism
 
-Do not spend MVP effort on the upscale/reconstruction stage.
+Do not spend core-model effort on realistic upscaling while temporal dynamics remain unstable.
 
 ## Premature scale
 
-Do not train a huge model before a tiny one can overfit and generate.
+Do not respond to the current failure merely by increasing parameter count or dataset size.
 
-## Uncontrolled renderer changes
+## Misleading validation success
 
-A preprocessing change can alter the entire token distribution.
+A lower one-step validation loss does not imply better free-running video.
 
-Version renderer configurations.
+## Frozen-video "stability"
 
-## Dataset leakage
+Do not optimize temporal regularization so aggressively that the model simply copies the prior frame. Stable motion is the goal, not still images.
 
-Split by source video, not by random adjacent clips, otherwise near-identical neighboring frames can appear in both training and validation.
+## Sampling-only fixes
 
-## Misleading metrics
-
-Do not report only single-frame accuracy.
-
-A model can score well while producing terrible autoregressive rollouts.
-
-## Unjustified scientific claims
-
-Treat all efficiency advantages as hypotheses until measured against baselines.
-
----
-
-# Suggested repository layout
-
-```text
-neurascii/
-├── README.md
-├── AGENTS.md
-├── pyproject.toml
-├── configs/
-│   ├── preprocess.yaml
-│   └── train_tiny.yaml
-├── src/
-│   └── neurascii/
-│       ├── __init__.py
-│       ├── format.py
-│       ├── preprocess.py
-│       ├── dataset.py
-│       ├── tokenizer.py
-│       ├── model.py
-│       ├── train.py
-│       ├── generate.py
-│       └── play.py
-├── scripts/
-│   ├── preprocess_video.py
-│   ├── inspect_dataset.py
-│   └── generate_sample.py
-├── tests/
-│   ├── test_format.py
-│   ├── test_roundtrip.py
-│   └── test_dataset.py
-└── samples/
-```
-
----
-
-# Coding style
-
-Prefer:
-
-- Python
-- PyTorch
-- typed APIs where useful
-- small CLI tools
-- explicit configuration
-- deterministic defaults
-- Linux-first implementation
-
-Keep dependencies minimal.
-
-Do not introduce a web stack for functionality that can remain CLI-native.
-
----
+A sampler that delays the attractor is useful diagnostically but does not by itself prove the learned dynamics are correct.
 
 # Agent behavior
 
-When modifying architecture or data representation:
+When changing architecture, objective, representation, or inference:
 
-1. explain the experimental reason in the commit or PR;
+1. state the hypothesis being tested;
 2. keep previous configurations reproducible;
-3. add/update tests for serialization;
-4. produce a sample output where applicable;
-5. record throughput/VRAM if the change affects training;
-6. avoid deleting an existing baseline merely because a newer approach looks better.
+3. change one major variable at a time where practical;
+4. add/update tests for serialization and tensor shapes;
+5. save representative autonomous rollouts, not only teacher-forced metrics;
+6. log throughput and VRAM for training-impacting changes;
+7. preserve baselines;
+8. explicitly report whether the **blob-growth/static-attractor** failure improved, worsened, or merely changed appearance.
 
-When uncertain, favor the smallest experiment that can falsify the idea.
+When uncertain, favor the smallest experiment that can falsify the hypothesis.
 
-The project should remain weird, simple, measurable, and runnable on one enthusiast workstation.
-
----
-
-# Current POC finding (Phase B — ApplyEyeMakeup): rollout stability failure
-
-**Phase label:** Phase B ApplyEyeMakeup / merged-Apply observation. It shapes *how* later phases evaluate rollouts; it does not cancel Phase C.
-
-The Phase B proof-of-concept was trained on the **UCF101 `ApplyEyeMakeup` subset** (and related Apply smoke), not on the full heterogeneous UCF101 action distribution.
-
-Observed behavior in free-running generation:
-
-- the first part of the generated sequence is visually recognizable and relatively stable;
-- coherence deteriorates after the initial rollout period;
-- later frames drift into increasingly abstract/blocky ASCII structure rather than preserving the original scene and motion;
-- the key problem highlighted by Phase B is **long-horizon stability**.
-
-Treat the current diagnosis as a hypothesis to test, not a settled fact. The leading explanation is classic autoregressive exposure-bias / rollout failure: small token mistakes accumulate, generated states drift away from the training distribution, and the model is then forced to condition on its own increasingly off-manifold outputs.
-
-**Phase C Fullvideo still runs at full dataset scale**, but must include these stability diagnostics on every serious train/eval: free-running rollouts at short/medium/long horizons (e.g. 16/48/96), exact sampler settings logged (greedy or temp≤0.7) in AVM metadata or a sidecar JSON next to GIFs, teacher-forced next-frame metrics vs free rollout, and frame-to-frame token-change stats under `samples/rollouts/`.
-
-## Immediate experiments, in priority order
-
-### 1. Prove the architecture can sustain a long rollout at all
-
-Intentionally overfit a single clip, then a tiny handful of clips.
-
-The model should be able to reproduce or continue these clips for a materially longer horizon without collapse. If it cannot remain stable even when memorization is easy, fix architecture/training/inference before adding data.
-
-Record free-rollout quality as a function of generated frame number.
-
-### 2. Train on its own rollout distribution
-
-Pure one-step teacher forcing can create a train/inference mismatch.
-
-Experiment with:
-
-- multi-step rollout loss;
-- scheduled sampling;
-- feeding a controlled fraction of model-generated frames back into the training context;
-- curriculum rollout horizons that increase during training.
-
-Compare one-step validation quality against actual free-running generation. A model that scores well under teacher forcing but collapses in free rollout has not solved the target task.
-
-### 3. Test frame-delta and patch prediction
-
-Try predicting **changes relative to the previous frame** rather than regenerating every cell from scratch.
-
-Also compare cell-level prediction against patch-level prediction.
-
-The hypothesis is that explicit temporal redundancy may reduce the number of opportunities for small errors to compound while encouraging preservation of stable scene structure.
-
-### 4. Sweep inference stochasticity
-
-Run controlled inference sweeps over:
-
-- temperature;
-- top-k;
-- top-p if implemented;
-- greedy decoding.
-
-Start with lower temperature and constrained sampling to determine whether collapse is partly sampling-driven.
-
-Always save the exact decoding configuration with generated samples.
-
-### 5. Add temporal stability pressure
-
-Investigate losses or regularizers that penalize unjustified glyph/color changes between adjacent frames while still permitting genuine motion.
-
-Possible measurements/targets:
-
-- glyph flicker rate;
-- foreground-color flicker rate;
-- background-color flicker rate;
-- frame-to-frame token change percentage;
-- patch persistence;
-- motion-aware rather than naive frame similarity.
-
-Do not simply force successive frames to be identical: the goal is stable motion, not frozen video.
-
-## Required diagnostics for this phase
-
-For every serious training run, produce at least:
-
-1. teacher-forced next-frame metrics;
-2. free-running rollout samples at fixed horizons;
-3. per-frame or per-step degradation curves;
-4. frame-to-frame token-change statistics;
-5. the exact sampler settings;
-6. comparison against a previous-frame-copy baseline;
-7. a deliberately overfit one/few-clip sanity test.
-
-Useful rollout horizons should include short, medium, and clearly failure-inducing lengths so the onset of degradation is visible rather than summarized into one aggregate number.
-
-The near-term **Phase B** POC milestone remains:
-
-> **Keep an `ApplyEyeMakeup` scene coherent through a substantially longer autonomous ASCII-video rollout.**
-
-Phase C Fullvideo proceeds in parallel at scale, carrying the diagnostics above rather than waiting on that milestone.
+The project should remain weird, simple, measurable, terminal-native, and runnable on one enthusiast workstation.
