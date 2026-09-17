@@ -1,0 +1,25 @@
+data:
+  context_frames: 8
+  patch_h: 4
+  patch_w: 4
+  processed_dir: data/processed/poc_eye
+model:
+  d_ff: 1024
+  d_model: 256
+  dropout: 0.1
+  n_heads: 4
+  n_layers: 4
+paths:
+  run_dir: runs/tiny_eye
+train:
+  batch_size: 4
+  checkpoint_every: 400
+  grad_clip: 1.0
+  log_every: 50
+  lr: 0.0003
+  max_steps: 400
+  num_workers: 2
+  precision: bf16
+  sample_every: 200
+  seed: 42
+  weight_decay: 0.01

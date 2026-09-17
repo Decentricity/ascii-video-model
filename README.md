@@ -1,6 +1,8 @@
-# ascii-video-model
+# neurascii
 
 A small neural video model that operates **natively on colored ASCII / libcaca-style video**, rather than on pixels.
+
+**Implemented MVP:** see [QUICKSTART.md](QUICKSTART.md). Makeup-class split: [docs/APPLY_SUBSET.md](docs/APPLY_SUBSET.md). Deferred work: [PHASE2.md](PHASE2.md).
 
 The core idea is to use libcaca (or a compatible ASCII renderer) as a **fixed perceptual encoder / handcrafted visual tokenizer**. Raw video is first converted into a time series of colored character grids. The model is then trained directly on that symbolic representation.
 
@@ -336,13 +338,13 @@ Inference output can be streamed directly to:
 Conceptually:
 
 ```bash
-ascii-video-model generate | ascii-video-player
+neurascii generate | neurascii play
 ```
 
 or:
 
 ```bash
-ascii-video-model generate --stream --ansi
+neurascii generate --stream --ansi
 ```
 
 This makes the system interesting independently of photorealistic reconstruction.

@@ -164,7 +164,7 @@ Before training anything, implement a player that reads the dataset format and r
 Suggested CLI:
 
 ```bash
-python -m ascii_video_model.play sample.caca-video
+python -m neurascii.play sample.caca-video
 ```
 
 Desired flags:
@@ -616,7 +616,7 @@ Treat all efficiency advantages as hypotheses until measured against baselines.
 # Suggested repository layout
 
 ```text
-ascii-video-model/
+neurascii/
 ├── README.md
 ├── AGENTS.md
 ├── pyproject.toml
@@ -624,7 +624,7 @@ ascii-video-model/
 │   ├── preprocess.yaml
 │   └── train_tiny.yaml
 ├── src/
-│   └── ascii_video_model/
+│   └── neurascii/
 │       ├── __init__.py
 │       ├── format.py
 │       ├── preprocess.py

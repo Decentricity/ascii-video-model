@@ -1,0 +1,18 @@
+renderer:
+  version: "libcaca-ctypes-v1"
+  width_chars: 80
+  height_chars: 48
+  fps: 10
+  glyph_vocab: reduced_ascii
+  color_palette: xterm256
+  dither_charset: "ascii"
+  dither_color: "full"
+  source_width: 320
+  source_height: 240
+
+paths:
+  raw_dir: data/raw/UCF101-Videos
+  out_dir: data/processed/poc_eye
+  manifest: data/manifest.json
+  # Empty for single-class directory inputs. Use "Apply" only for merged smoke.
+  class_prefix: ""

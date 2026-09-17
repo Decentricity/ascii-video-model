@@ -1,0 +1,36 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Data & artifacts — never push videos or trained weights
+data/
+videos/
+*.avi
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.part
+*.avm
+*.avm.npz
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+wandb/
+samples/generated/
+samples/rollouts/
+samples/videos/
+
+# Local env / secrets
+.env
+*.key
+groq.key
