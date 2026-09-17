@@ -85,6 +85,8 @@ def main() -> None:
                 str(out),
                 "--steps",
                 str(STEPS),
+                "--temperature",
+                "0",
             ]
         )
     print("DONE", flush=True)

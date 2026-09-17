@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Generate 10-GIF fullvideo carousel for neurascii.github.io (Phase C)."""
+"""Generate 10-GIF fullvideo carousel for neurascii.github.io (Phase C).
+
+Phase B stability shaping: greedy / temp<=0.7 sampling; sampler settings
+saved in AVM metadata + sidecar JSON; captions note the sampler.
+"""
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from collections import defaultdict
@@ -12,6 +17,11 @@ PAGES = Path("/home/decentricity/neurascii.github.io")
 VENV_PY = ROOT / ".venv" / "bin" / "python"
 LOG = Path("/tmp/carousel_fullvideo.log")
 WANT = 10
+# Phase C: constrained sampling (greedy by default)
+TEMPERATURE = 0.0
+TOP_K = 0
+STEPS = 100
+SAMPLER_CAPTION = "greedy (temp=0)"
 
 
 def log(msg: str) -> None:
@@ -55,18 +65,15 @@ def pick_class_seeds(processed: Path, want: int = WANT) -> list[tuple[str, str, 
     classes = sorted(by_class.keys())
     log(f"CLASSES_AVAILABLE={len(classes)}")
 
-    # Prefer diverse class coverage: evenly sample classes when many exist.
     if len(classes) >= want:
         step = len(classes) / want
         chosen_classes = [classes[int(i * step)] for i in range(want)]
-        # de-dupe while preserving order (edge case on tiny step collisions)
         seen: set[str] = set()
         uniq: list[str] = []
         for c in chosen_classes:
             if c not in seen:
                 seen.add(c)
                 uniq.append(c)
-        # fill any shortfall from remaining classes
         for c in classes:
             if len(uniq) >= want:
                 break
@@ -75,7 +82,6 @@ def pick_class_seeds(processed: Path, want: int = WANT) -> list[tuple[str, str, 
                 uniq.append(c)
         return [(c, parse_seed(by_class[c][0])[1], by_class[c][0]) for c in uniq[:want]]
 
-    # Fewer than want classes: round-robin second/third clips across classes.
     indices = {c: 0 for c in classes}
     out: list[tuple[str, str, Path]] = []
     while len(out) < want:
@@ -102,6 +108,27 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, cwd=str(ROOT), check=True)
 
 
+def run_stability_diag(ckpt: Path) -> None:
+    """Multi-horizon free rollouts + teacher-forced metrics (Phase B-shaped)."""
+    log("--- stability diagnostics (horizons 16/48/96) ---")
+    run(
+        [
+            str(VENV_PY),
+            str(ROOT / "scripts/fullvideo_stability_diag.py"),
+            "--checkpoint",
+            str(ckpt),
+            "--processed-dir",
+            str(ROOT / "data/processed/fullvideo"),
+            "--out-dir",
+            str(ROOT / "samples/rollouts"),
+            "--temperature",
+            str(TEMPERATURE),
+            "--n-seeds",
+            "4",
+        ]
+    )
+
+
 def main() -> None:
     LOG.write_text("", encoding="utf-8")
     ckpt = pick_ckpt(
@@ -111,6 +138,7 @@ def main() -> None:
     if not ckpt:
         raise SystemExit("no fullvideo checkpoint (runs/fullvideo/ckpt_best.pt or ckpt_last.pt)")
     log(f"CKPT={ckpt}")
+    log(f"SAMPLER temperature={TEMPERATURE} top_k={TOP_K} ({SAMPLER_CAPTION})")
 
     processed = ROOT / "data/processed/fullvideo"
     if not processed.is_dir():
@@ -121,32 +149,47 @@ def main() -> None:
     log(f"SEEDS={[f'{c}/{n}' for c, n, _ in seeds]}")
 
     (ROOT / "samples" / "rollouts").mkdir(parents=True, exist_ok=True)
+    run_stability_diag(ckpt)
     gifs_dir = PAGES / "assets" / "gifs"
     gifs_dir.mkdir(parents=True, exist_ok=True)
     caps_path = gifs_dir / "fullvideo_captions.txt"
     caps_path.write_text("", encoding="utf-8")
 
+    sampler_meta = {
+        "mode": "greedy" if TEMPERATURE <= 0 else "temperature",
+        "temperature": TEMPERATURE,
+        "top_k": TOP_K if TOP_K > 0 else None,
+        "steps": STEPS,
+        "caption_note": SAMPLER_CAPTION,
+    }
+    (gifs_dir / "fullvideo_sampler.json").write_text(
+        json.dumps(sampler_meta, indent=2) + "\n", encoding="utf-8"
+    )
+
     captions: list[str] = []
     for i, (cls, name, path) in enumerate(seeds, 1):
-        caption = f"{cls} / {name}"
+        caption = f"{cls} / {name} · {SAMPLER_CAPTION}"
         out = ROOT / "samples" / "rollouts" / f"carousel_fullvideo_{i:02d}.avm.npz"
         gif = gifs_dir / f"fullvideo_{i:02d}_{cls}.gif"
         log(f"--- fullvideo {i:02d} {caption} ---")
-        run(
-            [
-                str(VENV_PY),
-                "-m",
-                "neurascii.generate",
-                "--checkpoint",
-                str(ckpt),
-                "--seed-avm",
-                str(path),
-                "--out",
-                str(out),
-                "--steps",
-                "100",
-            ]
-        )
+        cmd = [
+            str(VENV_PY),
+            "-m",
+            "neurascii.generate",
+            "--checkpoint",
+            str(ckpt),
+            "--seed-avm",
+            str(path),
+            "--out",
+            str(out),
+            "--steps",
+            str(STEPS),
+            "--temperature",
+            str(TEMPERATURE),
+        ]
+        if TOP_K > 0:
+            cmd.extend(["--top-k", str(TOP_K)])
+        run(cmd)
         run(
             [
                 str(VENV_PY),

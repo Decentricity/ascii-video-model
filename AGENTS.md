@@ -682,20 +682,22 @@ The project should remain weird, simple, measurable, and runnable on one enthusi
 
 ---
 
-# Current POC finding: rollout stability failure
+# Current POC finding (Phase B — ApplyEyeMakeup): rollout stability failure
 
-The current proof-of-concept is trained on the **UCF101 `ApplyEyeMakeup` subset only**, not on the full heterogeneous UCF101 action distribution.
+**Phase label:** Phase B ApplyEyeMakeup / merged-Apply observation. It shapes *how* later phases evaluate rollouts; it does not cancel Phase C.
+
+The Phase B proof-of-concept was trained on the **UCF101 `ApplyEyeMakeup` subset** (and related Apply smoke), not on the full heterogeneous UCF101 action distribution.
 
 Observed behavior in free-running generation:
 
 - the first part of the generated sequence is visually recognizable and relatively stable;
 - coherence deteriorates after the initial rollout period;
 - later frames drift into increasingly abstract/blocky ASCII structure rather than preserving the original scene and motion;
-- the key problem to solve now is **long-horizon stability**, not broader dataset coverage.
+- the key problem highlighted by Phase B is **long-horizon stability**.
 
 Treat the current diagnosis as a hypothesis to test, not a settled fact. The leading explanation is classic autoregressive exposure-bias / rollout failure: small token mistakes accumulate, generated states drift away from the training distribution, and the model is then forced to condition on its own increasingly off-manifold outputs.
 
-Do **not** broaden the dataset or substantially scale model size until this failure mode is characterized.
+**Phase C Fullvideo still runs at full dataset scale**, but must include these stability diagnostics on every serious train/eval: free-running rollouts at short/medium/long horizons (e.g. 16/48/96), exact sampler settings logged (greedy or temp≤0.7) in AVM metadata or a sidecar JSON next to GIFs, teacher-forced next-frame metrics vs free rollout, and frame-to-frame token-change stats under `samples/rollouts/`.
 
 ## Immediate experiments, in priority order
 
@@ -770,6 +772,8 @@ For every serious training run, produce at least:
 
 Useful rollout horizons should include short, medium, and clearly failure-inducing lengths so the onset of degradation is visible rather than summarized into one aggregate number.
 
-The near-term POC milestone is therefore:
+The near-term **Phase B** POC milestone remains:
 
-> **Keep an `ApplyEyeMakeup` scene coherent through a substantially longer autonomous ASCII-video rollout before scaling data diversity.**
+> **Keep an `ApplyEyeMakeup` scene coherent through a substantially longer autonomous ASCII-video rollout.**
+
+Phase C Fullvideo proceeds in parallel at scale, carrying the diagnostics above rather than waiting on that milestone.
