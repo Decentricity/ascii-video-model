@@ -7,6 +7,7 @@ saved in AVM metadata + sidecar JSON; captions note the sampler.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from collections import defaultdict
@@ -137,14 +138,27 @@ def run_stability_diag(ckpt: Path) -> None:
 
 def main() -> None:
     LOG.write_text("", encoding="utf-8")
-    ckpt = pick_ckpt(
+    # Prefer Phase-7 bugblob finetune; NEURASCII_FULLVIDEO_CKPT overrides.
+    env_ckpt_s = os.environ.get("NEURASCII_FULLVIDEO_CKPT", "").strip()
+    env_ckpt = Path(env_ckpt_s) if env_ckpt_s else None
+    ckpt = env_ckpt if env_ckpt and env_ckpt.is_file() else pick_ckpt(
+        "runs/fullvideo_bugblob/ckpt_best.pt",
+        "runs/fullvideo_bugblob/ckpt_last.pt",
         "runs/fullvideo/ckpt_best.pt",
         "runs/fullvideo/ckpt_last.pt",
     )
     if not ckpt:
-        raise SystemExit("no fullvideo checkpoint (runs/fullvideo/ckpt_best.pt or ckpt_last.pt)")
+        raise SystemExit(
+            "no fullvideo checkpoint "
+            "(runs/fullvideo_bugblob/ckpt_best.pt or runs/fullvideo/ckpt_best.pt)"
+        )
     log(f"CKPT={ckpt}")
     log(f"SAMPLER temperature={TEMPERATURE} top_k={TOP_K} ({SAMPLER_CAPTION})")
+    force = os.environ.get("NEURASCII_CAROUSEL_FORCE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     processed = ROOT / "data/processed/fullvideo"
     if not processed.is_dir():
@@ -189,7 +203,7 @@ def main() -> None:
         caption = f"{cls} / {name} · {SAMPLER_CAPTION}"
         out = ROOT / "samples" / "rollouts" / f"carousel_fullvideo_{i:02d}.avm.npz"
         gif = gifs_dir / f"fullvideo_{i:02d}_{cls}.gif"
-        if gif.is_file() and gif.stat().st_size > 1000:
+        if (not force) and gif.is_file() and gif.stat().st_size > 1000:
             log(f"--- fullvideo {i:02d} SKIP existing {gif.name} ---")
             caption = existing_caps.get(i, caption)
             captions.append(caption)
