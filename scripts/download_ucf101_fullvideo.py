@@ -64,6 +64,19 @@ def extract_zips(root: Path) -> list[Path]:
     return extracted
 
 
+def delete_extracted_zips(zips: list[Path]) -> int:
+    """Remove zip archives after successful extract to reclaim disk space."""
+    deleted = 0
+    for zpath in zips:
+        try:
+            zpath.unlink(missing_ok=True)
+            deleted += 1
+            print(f"deleted zip {zpath}", flush=True)
+        except OSError as exc:
+            print(f"WARNING: could not delete {zpath}: {exc}", flush=True)
+    return deleted
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -118,6 +131,9 @@ def main() -> int:
         if zips:
             print(f"extracted {len(zips)} zip archive(s)", flush=True)
         avis = list_videos(root)
+        if avis and zips:
+            n_del = delete_extracted_zips(zips)
+            print(f"reclaimed space: deleted {n_del} zip archive(s)", flush=True)
 
     n = normalize_windows_paths(root)
     if n:
