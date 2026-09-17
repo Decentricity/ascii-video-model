@@ -1,0 +1,31 @@
+# Multi-class smoke — full on-disk UCF101-Videos dump
+data:
+  processed_dir: data/processed/videos_all
+  context_frames: 8
+  patch_h: 4
+  patch_w: 4
+
+model:
+  d_model: 512
+  n_heads: 8
+  n_layers: 8
+  d_ff: 2048
+  dropout: 0.15
+
+train:
+  batch_size: 2
+  lr: 2.0e-4
+  weight_decay: 0.01
+  max_steps: 8000
+  min_steps: 1000
+  log_every: 50
+  sample_every: 1000
+  checkpoint_every: 2000
+  early_stop_patience: 4
+  grad_clip: 1.0
+  precision: bf16
+  num_workers: 4
+  seed: 42
+
+paths:
+  run_dir: runs/videos_all
